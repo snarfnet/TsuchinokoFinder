@@ -260,21 +260,32 @@ final class CandidateDetectorViewModel: NSObject, ObservableObject {
     }
 
     private func candidateScore(rawConfidence: Double, frameAnalysis: CandidateFrameAnalysis) -> Double {
-        // Blend: ML model (1000+ training images) + shape analysis
-        // ML is the primary signal, shape is a bonus/penalty
+        // Blend: ML model (1000+ images) + shape + motion analysis
         let mlScore = rawConfidence
         let shapeScore = frameAnalysis.shapeScore
         let areaPenalty = frameAnalysis.objectArea > 0.55 ? 0.85 : 1.0
 
-        // ML model is trusted as primary detector (trained on 1000+ images)
-        // Shape analysis provides bonus for tsuchinoko-like shapes
+        // ML model is primary detector
         let shapeBonus = shapeScore > 0.5 ? 0.15 : (shapeScore > 0.3 ? 0.05 : -0.05)
 
-        // Score = ML confidence + shape bonus, with area penalty
-        let score = (mlScore + shapeBonus) * areaPenalty
+        // Tsuchinoko vs normal snake distinction:
+        // Tsuchinoko = fat body, short (aspect ratio 2-4), thick middle
+        // Normal snake = thin body, long (aspect ratio 5+)
+        let aspect = frameAnalysis.aspectRatio
+        let isTsuchinokoShape = aspect >= 1.5 && aspect <= 4.5  // fat & short
+        let isSnakeShape = aspect > 5.5                          // thin & long
+        let shapePenalty = isSnakeShape ? -0.20 : 0.0            // penalize normal snake shape
+        let tsuchinokoBonus = isTsuchinokoShape ? 0.10 : 0.0    // reward fat shape
 
-        // Synergy: both ML and shape agree = extra boost
-        let synergy = (mlScore > 0.5 && shapeScore > 0.5) ? 0.10 : 0.0
+        // Motion bonus: living creature moves = more likely real
+        let motionBonus = lastMotionScore > 0.03 ? 0.08 : 0.0
+
+        // Score = ML + shape + tsuchinoko shape + motion
+        let score = (mlScore + shapeBonus + tsuchinokoBonus + shapePenalty + motionBonus) * areaPenalty
+
+        // Synergy: ML + good shape + moving = very likely
+        let synergy = (mlScore > 0.5 && isTsuchinokoShape && lastMotionScore > 0.02) ? 0.12 :
+                      (mlScore > 0.5 && shapeScore > 0.5) ? 0.08 : 0.0
 
         return min(max(score + synergy, 0), 0.99)
     }
