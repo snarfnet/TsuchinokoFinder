@@ -260,10 +260,23 @@ final class CandidateDetectorViewModel: NSObject, ObservableObject {
     }
 
     private func candidateScore(rawConfidence: Double, frameAnalysis: CandidateFrameAnalysis) -> Double {
-        let areaPenalty = frameAnalysis.objectArea > 0.50 ? 0.65 : 1
-        let shapeBoost = max(frameAnalysis.shapeScore, 0.5)
-        let score = rawConfidence * shapeBoost * areaPenalty
-        return min(max(score, 0), 0.99)
+        // Blend: ML model (1000+ training images) + shape analysis
+        // ML is the primary signal, shape is a bonus/penalty
+        let mlScore = rawConfidence
+        let shapeScore = frameAnalysis.shapeScore
+        let areaPenalty = frameAnalysis.objectArea > 0.55 ? 0.85 : 1.0
+
+        // ML model is trusted as primary detector (trained on 1000+ images)
+        // Shape analysis provides bonus for tsuchinoko-like shapes
+        let shapeBonus = shapeScore > 0.5 ? 0.15 : (shapeScore > 0.3 ? 0.05 : -0.05)
+
+        // Score = ML confidence + shape bonus, with area penalty
+        let score = (mlScore + shapeBonus) * areaPenalty
+
+        // Synergy: both ML and shape agree = extra boost
+        let synergy = (mlScore > 0.5 && shapeScore > 0.5) ? 0.10 : 0.0
+
+        return min(max(score + synergy, 0), 0.99)
     }
 
     private func displayConfidence(
@@ -271,12 +284,8 @@ final class CandidateDetectorViewModel: NSObject, ObservableObject {
         rawConfidence: Double,
         frameAnalysis: CandidateFrameAnalysis
     ) -> Double {
-        guard candidateStreak >= requiredCandidateStreak else {
-            if rawConfidence >= 0.90 && frameAnalysis.shapeScore < minimumShapeScore {
-                return min(calibratedConfidence, 0.49)
-            }
-            return min(calibratedConfidence, threshold - 0.01)
-        }
+        // Always show the real calibrated score - don't cap it
+        // Users should see the score climb as they point at tsuchinoko-like things
         return calibratedConfidence
     }
 
